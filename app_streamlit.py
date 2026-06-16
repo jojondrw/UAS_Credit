@@ -1,9 +1,25 @@
 import streamlit as st
 import pandas as pd
-from inference import CreditScoringInference
+import json
+import os
+import boto3
+from botocore.exceptions import ClientError, NoCredentialsError
 
-# Load model + preprocessing 
-infer = CreditScoringInference()
+ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "credit-score-endpoint")
+REGION = os.environ.get("AWS_REGION", "us-east-1")
+
+@st.cache_resource
+def get_runtime_client():
+    return boto3.client("sagemaker-runtime", region_name=REGION)
+
+def invoke_endpoint(data_dict):
+    runtime = get_runtime_client()
+    payload = {"instances": [data_dict]}
+    response = runtime.invoke_endpoint(
+        EndpointName=ENDPOINT_NAME, ContentType="application/json",
+        Accept="application/json", Body=json.dumps(payload),
+    )
+    return json.loads(response["Body"].read().decode("utf-8"))[0]
 
 # Opsi dropdown (nilai persis dari dataset)
 MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August']
@@ -86,18 +102,23 @@ def main():
         }
         data.update(loan_values)   # tambah 8 kolom pinjaman
 
-        result = infer.predict(data)
-
-        st.subheader("Hasil Prediksi")
-        score = result['prediction']
-        if score == 'Good':
-            st.success(f"Credit Score: {score}")
-        elif score == 'Standard':
-            st.info(f"Credit Score: {score}")
+        try:
+            result = invoke_endpoint(data)
+        except NoCredentialsError:
+            st.error("No AWS credentials found.")
+        except ClientError as e:
+            st.error(f"AWS error: {e.response['Error'].get('Message', str(e))}")
         else:
-            st.error(f"Credit Score: {score}")
-        st.write("Probabilitas tiap kelas:")
-        st.bar_chart(pd.Series(result['probabilities']))
+            st.subheader("Hasil Prediksi")
+            score = result['prediction']
+            if score == 'Good':
+                st.success(f"Credit Score: {score}")
+            elif score == 'Standard':
+                st.info(f"Credit Score: {score}")
+            else:
+                st.error(f"Credit Score: {score}")
+            st.write("Probabilitas tiap kelas:")
+            st.bar_chart(pd.Series(result['probabilities']))
 
 
 if __name__ == "__main__":
